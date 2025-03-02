@@ -25,6 +25,15 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
     if (gameScene) {
       // Reset the scene instead of recreating the game
       gameScene.scene.restart();
+      
+      // Make sure the onScoreUpdate callback is properly set for the new scene
+      const scene = gameScene.scene.get('DoodleJumpScene');
+      if (scene && scene.events) {
+        // Add a custom event listener for score updates
+        scene.events.once('create', () => {
+          console.log('Scene restarted, reconnecting score update');
+        });
+      }
     }
   };
 
@@ -36,68 +45,108 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
       private platforms?: Phaser.Physics.Arcade.Group;
       private player?: Phaser.Physics.Arcade.Sprite;
       private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
+      private keys: { [key: string]: Phaser.Input.Keyboard.Key | undefined } = {};
       private score = 0;
       private scoreText?: Phaser.GameObjects.Text;
       private highestY = 0;
       private isGameOver = false;
       private enemies?: Phaser.Physics.Arcade.Group;
-      private canvasWidth = 0;
-      private canvasHeight = 0;
+      private clouds?: Phaser.GameObjects.Group;
 
-      constructor() {
+        constructor() {
         super({ key: 'DoodleJumpScene' });
-      }
+        }
 
-      preload() {
-        // Use a rectangular image for platforms that will look more like paper rolls when rotated
-        this.load.image('platform-cylinder', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/block.png');
-        
-        // Keep the player image
-        this.load.image('player', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/phaser-dude.png');
-        
-        // Load special items
-        this.load.image('spring', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/spring.png');
-        this.load.image('jetpack', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/jet.png');
-      }
+        preload() {
+          // Load custom platform image instead of the default one
+          this.load.image('platform', '/assets/platforms/platform1.png');
+          
+          // Keep the hedgy character images
+          this.load.image('hedgy1', '/assets/charachter/hedgy1.png');
+          this.load.image('hedgy2', '/assets/charachter/hedgy2.png');
+          
+          // Keep the fallback in case the images still don't load
+          this.load.on('loaderror', (fileObj: any) => {
+            console.log('Error loading:', fileObj.key);
+            
+            // If hedgy images fail to load, use a placeholder
+            if (fileObj.key === 'hedgy1' || fileObj.key === 'hedgy2') {
+              this.load.image(fileObj.key, 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/phaser-dude.png');
+              this.load.start(); // Restart loader for this asset
+            }
+            
+            // If platform image fails to load, use the default one
+            if (fileObj.key === 'platform') {
+              this.load.image(fileObj.key, 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/platform.png');
+              this.load.start(); // Restart loader for this asset
+            }
+          });
+          
+          // For platform types, use the same custom platform image with different tints
+          this.load.image('platform-default', '/assets/platforms/platform1.png');
+          this.load.image('platform-moving', '/assets/platforms/platform1.png');
+          this.load.image('platform-breakable', '/assets/platforms/platform1.png');
+          this.load.image('platform-disappearing', '/assets/platforms/platform1.png');
+          this.load.image('monster', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/phaser-dude.png');
+          
+          // Cloud images - make sure these exist
+          this.load.image('cloud1', '/assets/clouds/cloud1.png');
+          this.load.image('cloud2', '/assets/clouds/cloud2.png');
+          this.load.image('cloud3', '/assets/clouds/cloud3.png');
+          
+          // Fallback for cloud images
+          this.load.on('loaderror', (fileObj: any) => {
+            if (fileObj.key.startsWith('cloud')) {
+              this.load.image(fileObj.key, 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/cloud.png');
+              this.load.start(); // Restart loader for this asset
+            }
+          });
+        }
 
-      create() {
+        create() {
         // Store this scene for external access
         gameScene = this;
         
-        // Reset game state variables
-        this.score = 0;
+        // Reset state
         this.isGameOver = false;
+        this.score = 0;
+        this.highestY = 0;
         
-        // Get the actual canvas dimensions and store them in class properties
-        this.canvasWidth = this.sys.game.canvas.width;
-        this.canvasHeight = this.sys.game.canvas.height;
+        // Explicitly call onScoreUpdate with the initial score
+        onScoreUpdate(0);
         
-        // Reset camera to top
-        this.cameras.main.scrollY = 0;
+        // Set sky color
+        this.cameras.main.setBackgroundColor('#87CEEB');
         
-        // Configure world bounds using class properties
-        this.physics.world.setBounds(0, -10000, this.canvasWidth, 20000);
+        // Create cloud group
+        this.clouds = this.add.group();
+        
+        // Create initial clouds at different depths
+        for (let i = 0; i < 15; i++) {
+          this.createCloud();
+        }
+        
+        // Configure world bounds to be very tall and wider
+        this.physics.world.setBounds(0, -10000, 800, 20000);
         
         // Setup platform types - IMPORTANT: Don't use StaticGroup for moving platforms
         this.platforms = this.physics.add.group(); // Use regular group for dynamic behavior
         
         // Create initial platforms
         if (this.platforms) {
-          // Start with a paper roll platform at the bottom
-          const basePlatform = this.platforms.create(200, 550, 'platform-cylinder');
-          basePlatform.setAngle(90); // Rotate to horizontal
-          basePlatform.setScale(0.4, 1.2); // Much larger base platform
+          // Start with a platform at the bottom - no need for green tint now
+          const basePlatform = this.platforms.create(400, 550, 'platform');
+          basePlatform.setScale(0.5, 0.5); // Adjust scale to fit your custom platform image
           basePlatform.setData('type', 'regular');
           basePlatform.setImmovable(true);
-          basePlatform.setTint(0xDDDDDD); // Light gray like paper
           
-          // Create initial platforms
-          for (let i = 0; i < 10; i++) {
-            const variance = Math.sin(i * 0.5) * 150;
-            const x = 200 + variance;
+          // Create more initial platforms going much higher
+          // This ensures there are already platforms in place when the game starts
+          for (let i = 0; i < 25; i++) { // Increased from 10 to 25
+            const variance = Math.sin(i * 0.5) * 300;
+            const x = 400 + variance;
             const y = 500 - (i * 80);
             
-            // Platform type logic
             let platformType = 'regular';
             if (i > 3) {
               const rnd = Math.random();
@@ -109,22 +158,19 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
           }
         }
         
-        // Player character setup
-        this.player = this.physics.add.sprite(200, 500, 'player');
+        // Player character setup - use hedgy1 instead of 'player'
+        this.player = this.physics.add.sprite(400, 500, 'hedgy1');
         this.player.setBounce(0);
-        this.player.setCollideWorldBounds(true);
-        
+          this.player.setCollideWorldBounds(true);
+          
         // Initial upward velocity
         this.player.setVelocityY(-400);
-        
-        // CRITICAL: Initialize highestY to player's starting position
-        this.highestY = this.player.y;
-        
+
         // Collision handler
         if (this.player && this.platforms) {
-          this.physics.add.collider(
-            this.player,
-            this.platforms,
+            this.physics.add.collider(
+              this.player, 
+              this.platforms, 
             (player, platform) => {
               // Cast to proper types
               const p = player as Phaser.Physics.Arcade.Sprite;
@@ -132,30 +178,28 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
               
               // Apply bounce and handle platform effects
               if (p.body && p.body.velocity.y > 0) {
-                // Regular platforms bounce normally
-                const platformType = plat.getData('type');
+                // Apply bounce
+                p.setVelocityY(-720);
                 
-                // Vary bounce height slightly based on platform type
-                if (platformType === 'moving') {
-                  p.setVelocityY(-650); // Moving platforms give a bit higher bounce
-                } else {
-                  p.setVelocityY(-600); // Standard bounce
-                }
+                // Switch to hedgy2 sprite for bounce animation
+                p.setTexture('hedgy2');
                 
-                // Visual feedback - different colors for different platforms
-                if (platformType === 'regular') {
-                  plat.setTintFill(0x00FF00);
-                } else if (platformType === 'moving') {
-                  plat.setTintFill(0x00AAFF);
-                } else if (platformType === 'breakable') {
-                  plat.setTintFill(0xFFAA00);
-                }
+                // Switch back to hedgy1 after a short delay
+                this.time.delayedCall(200, () => {
+                  if (p.active) { // Check if sprite still exists
+                    p.setTexture('hedgy1');
+                  }
+                });
                 
+                // Visual feedback on platform
+                plat.setTintFill(0x00FF00);
                 this.time.delayedCall(100, () => {
                   plat.clearTint();
                 });
                 
                 // Handle special platform types
+                const platformType = plat.getData('type');
+                
                 if (platformType === 'breakable') {
                   // Breakable platforms disappear after one bounce
                   this.tweens.add({
@@ -176,59 +220,140 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
           );
         }
         
-        // Setup controls
-        this.cursors = this.input.keyboard?.createCursorKeys();
-        
-        // Score display
-        this.scoreText = this.add.text(16, 16, 'Score: 0', {
+        // Setup controls - both arrow keys and A/D
+          this.cursors = this.input.keyboard?.createCursorKeys();
+
+        // Add A and D keys
+        this.keys = {
+          A: this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.A),
+          D: this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.D)
+        };
+
+        // Move the score text creation to AFTER all other setup
+        // Score display - create this AFTER everything and set highest depth
+        this.scoreText = this.add.text(16, 16, 'Score: 0', { 
           fontSize: '24px',
           color: '#fff',
           stroke: '#000',
           strokeThickness: 3
-        }).setScrollFactor(0);
+        })
+        .setScrollFactor(0)
+        .setDepth(100);
         
-        // Screen wrapping
-        if (this.player.x < 0) {
-          this.player.x = this.canvasWidth;
-        } else if (this.player.x > this.canvasWidth) {
-          this.player.x = 0;
-        }
+        // Add a background to the score for better visibility
+        const scoreBackground = this.add.rectangle(
+          0, 0, 
+          0, 0, // Will be sized in the next step
+          0x000000, 
+          0.3
+        )
+        .setOrigin(0, 0)
+        .setScrollFactor(0)
+        .setDepth(99); // Just below the text
         
-        // Platform positioning
-        // Change all instances of hardcoded values (like 200, 350, etc.) to be relative to width
-        const centerX = this.canvasWidth / 2;
-        const edgeDistance = this.canvasWidth * 0.1; // 10% from edge
-        
-        // Update platform creation to use relative positioning
-        let x;
-        if (Math.random() < 0.4) {
-          x = Math.random() < 0.5 ? 
-            Phaser.Math.Between(edgeDistance, this.canvasWidth * 0.25) : // Left edge
-            Phaser.Math.Between(this.canvasWidth * 0.75, this.canvasWidth - edgeDistance); // Right edge
-        } else {
-          x = Phaser.Math.Between(this.canvasWidth * 0.2, this.canvasWidth * 0.8);
-        }
+        // Size and position the background based on the text
+        scoreBackground.width = this.scoreText.width + 20;
+        scoreBackground.height = this.scoreText.height + 10;
+        scoreBackground.x = this.scoreText.x - 10;
+        scoreBackground.y = this.scoreText.y - 5;
       }
       
       update(time: number, delta: number) {
-        if (!this.player || !this.cursors || !this.platforms || !this.scoreText || this.isGameOver) return;
+        if (!this.player || !this.cursors || !this.platforms || !this.scoreText || !this.keys || this.isGameOver) return;
         
-        // Track camera's current position
-        const currentCameraY = this.cameras.main.scrollY;
+        // IMPROVED CAMERA MOVEMENT:
+        // Only move platforms when player is moving upward and above threshold
+        // This allows players to fall back onto the same platforms
+        const CAMERA_THRESHOLD = 250;
         
-        // Move camera only if player is higher than camera's current view
-        const CAMERA_OFFSET = 150;
-        
-        if (this.player.y < currentCameraY + CAMERA_OFFSET) {
-          // Only move camera up, never down
-          this.cameras.main.scrollY = this.player.y - CAMERA_OFFSET;
+        // Move clouds continuously when player is moving upward, regardless of position
+        if (this.player.body && this.player.body.velocity.y < 0 && this.clouds) {
+          // Calculate movement factor based on player's upward velocity
+          const velocityFactor = Math.abs(this.player.body.velocity.y) / 1000;
+          
+          this.clouds.getChildren().forEach((child: any) => {
+            const cloud = child as Phaser.GameObjects.Image;
+            const depth = cloud.getData('depth') || 1;
+            
+            // Move clouds based on player velocity and cloud depth
+            // Use three distinct speed factors for the three depth layers
+            let speedFactor;
+            if (depth === 0) {
+              // Far background - moves slowest
+              speedFactor = 0.6;
+            } else if (depth === 1) {
+              // Middle layer
+              speedFactor = 1.5;
+            } else {
+              // Foreground - moves fastest
+              speedFactor = 2.5;
+            }
+            
+            cloud.y += velocityFactor * speedFactor * 15;
+            
+            // Add subtle horizontal drift based on depth
+            // This creates a more dynamic feel
+            if (depth === 0) {
+              // Far clouds drift very slowly
+              cloud.x += Math.sin(time / 5000) * 0.1;
+            } else if (depth === 1) {
+              // Middle clouds drift a bit more
+              cloud.x += Math.sin(time / 3000 + cloud.y / 100) * 0.2;
+            } else {
+              // Near clouds drift the most
+              cloud.x += Math.sin(time / 2000 + cloud.y / 50) * 0.3;
+            }
+            
+            // Recycle clouds that move off-screen
+            if (cloud.y > 900) {
+              cloud.y = -100;
+              cloud.x = Phaser.Math.Between(0, 800);
+            }
+            
+            // Also recycle clouds that drift too far horizontally
+            if (cloud.x < -100 || cloud.x > 900) {
+              cloud.x = Phaser.Math.Between(100, 700);
+            }
+          });
         }
         
-        // Update score based on highest point reached (separate from camera movement)
-        if (this.player.y < this.highestY) {
-          this.highestY = this.player.y;
-          // Calculate score based on how high player has climbed from starting position
-          this.score = Math.floor(Math.abs(this.highestY - 500) / 10);
+        // Original camera threshold logic for platforms
+        if (this.player.y < CAMERA_THRESHOLD && this.player.body && this.player.body.velocity.y < 0) {
+          // Only move platforms when player is moving UP and above threshold
+          const diff = CAMERA_THRESHOLD - this.player.y;
+          this.player.y = CAMERA_THRESHOLD;
+          
+          // Move all platforms down by the difference
+          this.platforms.getChildren().forEach((child: any) => {
+            child.y += diff;
+          });
+          
+          // Move clouds at different speeds based on their depth
+          if (this.clouds) {
+            this.clouds.getChildren().forEach((child: any) => {
+              const cloud = child as Phaser.GameObjects.Image;
+              const depth = cloud.getData('depth') || 1;
+              
+              // Use three distinct speed factors for the three depth layers
+              let speedFactor;
+              if (depth === 0) {
+                // Far background - moves slowest
+                speedFactor = 0.3;
+              } else if (depth === 1) {
+                // Middle layer
+                speedFactor = 0.8;
+              } else {
+                // Foreground - moves fastest
+                speedFactor = 1.8;
+              }
+              
+              cloud.y += diff * speedFactor;
+            });
+          }
+          
+          // Update highest point and score
+          this.highestY -= diff;
+          this.score = Math.floor(Math.abs(this.highestY) / 10);
           this.scoreText.setText(`Score: ${this.score}`);
           onScoreUpdate(this.score);
         }
@@ -247,138 +372,74 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
             // Change direction at edges
             if (platform.x < 50) {
               platform.setData('direction', 1);
-            } else if (platform.x > this.canvasWidth - 50) { // Use canvasWidth
+            } else if (platform.x > 350) {
               platform.setData('direction', -1);
             }
           }
         });
         
-        // Player horizontal movement
-        if (this.cursors.left.isDown) {
+        // Player horizontal movement with proper sprite flipping
+        if (this.cursors.left.isDown || (this.keys.A && this.keys.A.isDown)) {
           this.player.setVelocityX(-300);
-          this.player.setFlipX(true);
-        } else if (this.cursors.right.isDown) {
+          this.player.setFlipX(true); // Flip sprite when moving left
+        } else if (this.cursors.right.isDown || (this.keys.D && this.keys.D.isDown)) {
           this.player.setVelocityX(300);
-          this.player.setFlipX(false);
-        } else {
-          this.player.setVelocityX(0);
-        }
-        
-        // Wrap player around screen edges
+          this.player.setFlipX(false); // Don't flip sprite when moving right
+          } else {
+            this.player.setVelocityX(0);
+          }
+
+        // Wrap player around screen edges with wider screen
         if (this.player.x < 0) {
-          this.player.x = this.canvasWidth;
-        } else if (this.player.x > this.canvasWidth) {
-          this.player.x = 0;
+          this.player.x = 800;
+        } else if (this.player.x > 800) {
+            this.player.x = 0;
         }
         
-        // Game over when falling too far below camera view
-        // This creates the "falling into the void" effect
-        const FALL_THRESHOLD = 600; // How far below camera view player can fall before game over
-        if (this.player.y > this.cameras.main.scrollY + this.canvasHeight + 100) { 
+        // Clean up platforms and generate new ones
+        this.cleanupPlatforms();
+        this.generatePlatforms();
+        
+        // Game over when falling too far - adjust for taller screen
+        if (this.player.y > CAMERA_THRESHOLD + 700) { // Increased from 500 to 700
           this.gameOver();
         }
-        
-        // Generate new platforms as player moves up
-        this.generatePlatforms();
-        this.cleanupPlatforms();
       }
 
       // Create platform with specified type
       createPlatform(x: number, y: number, type: string = 'regular') {
         if (!this.platforms) return null;
         
-        // Create platform with the block image
-        const platform = this.platforms.create(x, y, 'platform-cylinder');
+        const platform = this.platforms.create(x, y, 'platform');
         
-        // Set the platform to be horizontal
-        platform.setAngle(90);
-        
-        // Make platforms much larger and more visible
-        let lengthScale;
-        if (type === 'regular') {
-          lengthScale = Phaser.Math.FloatBetween(0.8, 1.2); // Much longer for regular
-        } else if (type === 'moving') {
-          lengthScale = Phaser.Math.FloatBetween(0.7, 1.0); // Medium for moving
-        } else {
-          lengthScale = Phaser.Math.FloatBetween(0.6, 0.9); // Shorter for breakable
-        }
-        
-        // Increase both width and height significantly
-        platform.setScale(0.4, lengthScale);
+        // Adjust scale based on the new image dimensions
+        // You may need to adjust these values based on your actual image size
+        platform.setScale(0.5, 0.5); // Adjust scale to fit your custom platform image
         
         platform.setData('type', type);
         platform.setImmovable(true);
         
-        // Use very distinct colors to ensure visibility
+        // Setup special platform types with tints
         if (type === 'moving') {
-          platform.setTint(0x66AAFF); // Bright blue for moving
+          platform.setTint(0x0088ff); // Blue tint for moving platforms
+          platform.setData('direction', Math.random() > 0.5 ? 1 : -1);
+          platform.setData('speed', Phaser.Math.Between(120, 200));
         } else if (type === 'breakable') {
-          platform.setTint(0xFFAA66); // Bright orange for breakable
+          platform.setTint(0xff8800); // Orange tint for breakable platforms
         } else {
-          platform.setTint(0xDDDDDD); // Light gray for regular paper
+          // Regular platforms don't need a tint anymore since we're using a custom image
+          // platform.setTint(0x00ff00); // Remove this line or comment it out
         }
         
         return platform;
       }
 
-      // New method to add special items to platforms
-      addSpecialItem(platform: Phaser.Physics.Arcade.Sprite) {
-        const itemType = Math.random() < 0.7 ? 'spring' : 'jetpack';
-        
-        // Create the item
-        const item = this.physics.add.sprite(platform.x, platform.y - 15, itemType);
-        item.setData('type', itemType);
-        
-        // Scale item appropriately
-        if (itemType === 'spring') {
-          item.setScale(0.2);
-        } else {
-          item.setScale(0.15);
-        }
-        
-        // Add collision with player
-        if (this.player) {
-          this.physics.add.overlap(
-            this.player,
-            item,
-            (player, specialItem) => {
-              // Cast to proper types
-              const p = player as Phaser.Physics.Arcade.Sprite;
-              const item = specialItem as Phaser.Physics.Arcade.Sprite;
-              
-              // Handle different item types
-              if (item.getData('type') === 'spring') {
-                // Springs give a super high jump
-                p.setVelocityY(-900);
-                
-                // Visual feedback
-                this.tweens.add({
-                  targets: item,
-                  scaleY: 0.3,
-                  duration: 100,
-                  yoyo: true
-                });
-              } else if (item.getData('type') === 'jetpack') {
-                // Jetpacks give a massive boost upward
-                p.setVelocityY(-1500);
-                
-                // Remove the jetpack after use
-                item.destroy();
-              }
-            }
-          );
-        }
-      }
-
       // Clean up platforms that are off-screen
       cleanupPlatforms() {
-        if (!this.platforms) return;
-        
-        // Remove platforms that are far below the camera view
-        const cameraBottom = this.cameras.main.scrollY + this.canvasHeight;
+        if (!this.platforms || !this.player) return;
         
         this.platforms.getChildren().forEach((child: any) => {
-          if (child.y > cameraBottom + 300) { // Clean up platforms well below view
+          if (child.y > this.player!.y + 600) {
             child.destroy();
           }
         });
@@ -396,65 +457,48 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
           }
         });
         
-        // Generate new platforms if needed
-        if (highestY > this.player.y - 300) {
-          // Ensure minimum number of platforms regardless of score
-          const PLATFORM_COUNT = Math.max(3, 5 - Math.floor(this.score / 300));
-          
-          // Keep track of the last platform position to ensure reachability
-          let lastX = this.player.x;
-          let lastY = highestY;
+        // Generate new platforms much further ahead (off-screen)
+        // This ensures platforms are already in place before they become visible
+        if (highestY > this.player.y - 800) { // Generate platforms much further ahead (was 300)
+          // Add platforms with proper spacing
+          const PLATFORM_COUNT = Math.max(2, 5 - Math.floor(this.score / 200));
           
           for (let i = 0; i < PLATFORM_COUNT; i++) {
-            // Calculate gap based on score, but with a reasonable minimum and maximum
-            const minGap = Math.min(150, 80 + this.score / 20); 
-            const maxGap = Math.min(250, 120 + this.score / 10);
+            // Significantly more challenging gaps as score increases
+            const minGap = Math.min(180, 100 + this.score / 10); 
+            const maxGap = Math.min(300, 150 + this.score / 5);
             
             const gap = Phaser.Math.Between(minGap, maxGap);
-            const y = lastY - gap;
+            const y = highestY - (i + 1) * gap;
             
-            // Calculate x position to ensure it's reachable from the last platform
-            // Maximum horizontal distance a player can cover in one jump
-            const MAX_HORIZONTAL_REACH = 200;
-            
+            // More variance in horizontal positioning for wider screen
             let x;
-            if (i === 0) {
-              // First platform should be reachable from player's current position
-              x = Phaser.Math.Between(
-                Math.max(50, this.player.x - 150),
-                Math.min(this.canvasWidth - 50, this.player.x + 150)
-              );
+            if (Math.random() < 0.4) {
+              // Place near edges 40% of the time at higher scores
+              x = Math.random() < 0.5 ? 
+                Phaser.Math.Between(50, 200) : // Left side
+                Phaser.Math.Between(600, 750); // Right side
             } else {
-              // Subsequent platforms should be reachable from previous platform
-              x = Phaser.Math.Between(
-                Math.max(50, lastX - MAX_HORIZONTAL_REACH),
-                Math.min(this.canvasWidth - 50, lastX + MAX_HORIZONTAL_REACH)
-              );
+              // Otherwise place more centrally but with variance
+              x = Phaser.Math.Between(200, 600);
             }
             
-            // Ensure at least one platform is regular and easy to reach
+            // Platform type distribution
             let type = 'regular';
-            if (i > 0 || this.score < 50) { // Keep first platform regular for lower scores
-              const rnd = Math.random();
-              
-              if (this.score > 100) {
-                if (rnd < 0.3) type = 'moving';
-                else if (rnd < 0.5) type = 'breakable';
-              } else if (this.score > 50) {
-                if (rnd < 0.2) type = 'moving';
-                else if (rnd < 0.3) type = 'breakable';
-              } else {
-                if (rnd < 0.1) type = 'moving';
-                else if (rnd < 0.15) type = 'breakable';
-              }
+            const rnd = Math.random();
+            
+            if (this.score > 100) {
+              if (rnd < 0.4) type = 'moving';
+              else if (rnd < 0.7) type = 'breakable';
+            } else if (this.score > 50) {
+              if (rnd < 0.3) type = 'moving';
+              else if (rnd < 0.5) type = 'breakable';
+            } else if (this.score > 20) {
+              if (rnd < 0.2) type = 'moving';
+              else if (rnd < 0.3) type = 'breakable';
             }
             
-            // Create the platform
-            const platform = this.createPlatform(x, y, type);
-            
-            // Remember this platform's position for next iteration
-            lastX = x;
-            lastY = y;
+            this.createPlatform(x, y, type);
           }
         }
       }
@@ -483,7 +527,10 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
             stroke: '#000',
             strokeThickness: 6
           }
-        ).setOrigin(0.5).setScrollFactor(0);
+        )
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(100); // Set high depth
         
         // Show score
         this.add.text(
@@ -496,20 +543,80 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
             stroke: '#000',
             strokeThickness: 4
           }
-        ).setOrigin(0.5).setScrollFactor(0);
+        )
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(100); // Set high depth
+      }
+
+      // Add a method to create clouds
+      createCloud() {
+        if (!this.clouds) return;
+        
+        // Random position
+        const x = Phaser.Math.Between(0, 800);
+        const y = Phaser.Math.Between(0, 800);
+        
+        // Randomly choose between cloud1, cloud2, and cloud3
+        const cloudIndex = Math.floor(Math.random() * 3) + 1;
+        const cloudKey = `cloud${cloudIndex}`;
+        
+        // Create cloud with the selected image
+        const cloud = this.add.image(x, y, cloudKey);
+        
+        // Create three distinct depth layers instead of just two
+        // This will give us more parallax variation
+        let scale, depth;
+        const layerRnd = Math.random();
+        
+        if (layerRnd < 0.33) {
+          // Far background layer - small clouds
+          scale = Phaser.Math.FloatBetween(0.2, 0.5);
+          depth = 0;
+          cloud.setAlpha(Phaser.Math.FloatBetween(0.2, 0.4)); // More transparent
+          cloud.setTint(0xccccff); // Slight blue tint for distant clouds
+        } else if (layerRnd < 0.66) {
+          // Middle layer
+          scale = Phaser.Math.FloatBetween(0.5, 0.9);
+          depth = 1;
+          cloud.setAlpha(Phaser.Math.FloatBetween(0.4, 0.7));
+          cloud.setTint(0xddddff); // Very slight blue tint
+        } else {
+          // Foreground layer - larger clouds
+          scale = Phaser.Math.FloatBetween(0.9, 1.5);
+          depth = 2;
+          cloud.setAlpha(Phaser.Math.FloatBetween(0.7, 0.9));
+        }
+        
+        cloud.setScale(scale);
+        
+        // Randomly flip horizontally for more variety (50% chance)
+        if (Math.random() > 0.5) {
+          cloud.setFlipX(true);
+        }
+        
+        // Set depth for rendering order
+        cloud.setDepth(depth);
+        cloud.setData('depth', depth);
+        
+        // Add to group
+        this.clouds.add(cloud);
+        
+        return cloud;
       }
     }
 
     // Only create the game if it doesn't exist
     if (!gameInstance && gameContainerRef.current) {
+      // Get the container dimensions to set the game size
+      const containerWidth = gameContainerRef.current.clientWidth;
+      const containerHeight = gameContainerRef.current.clientHeight;
+      
       const config: Phaser.Types.Core.GameConfig = {
         type: Phaser.CANVAS,
-        scale: {
-          mode: Phaser.Scale.RESIZE,
-          width: '100%',
-          height: '100%',
-          parent: gameContainerRef.current,
-        },
+        width: 800,
+        height: 900, // Increase base height to 900px to match container maxHeight
+        parent: gameContainerRef.current,
         backgroundColor: '#87CEEB',
         physics: {
           default: 'arcade',
@@ -518,12 +625,29 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
             debug: false
           }
         },
-        scene: [DoodleJumpScene]
+        scene: [DoodleJumpScene],
+        scale: {
+          mode: Phaser.Scale.FIT,
+          autoCenter: Phaser.Scale.CENTER_BOTH,
+          width: 800,
+          height: 900, // Match the container maxHeight
+        }
       };
 
       console.log("Creating new Phaser game instance");
       gameInstance = new Phaser.Game(config);
       isGameInitialized = true;
+      
+      // Add resize handler to adjust game size when window is resized
+      const resizeGame = () => {
+        if (gameInstance && gameContainerRef.current) {
+          const width = gameContainerRef.current.clientWidth;
+          const height = gameContainerRef.current.clientHeight;
+          gameInstance.scale.resize(width, height);
+        }
+      };
+      
+      window.addEventListener('resize', resizeGame);
     }
 
     // Cleanup function
@@ -536,9 +660,15 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
   if (!gameStarted) {
     return (
       <div className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-600 flex flex-col items-center justify-center" 
-           style={{ width: '100%', aspectRatio: '2/3', maxWidth: '600px', margin: '0 auto' }}>
+           style={{ 
+             width: '100%', 
+             maxWidth: '800px',
+             height: '100vh', 
+             maxHeight: '900px',
+             margin: '0 auto' 
+           }}>
         <h2 className="text-white text-3xl font-bold mb-8 text-center">Doodle Jump</h2>
-        <p className="text-white text-lg mb-8 text-center">Use arrow keys to move left and right</p>
+        <p className="text-white text-lg mb-8 text-center">Use arrow keys or A/D to move left and right</p>
         <button 
           onClick={startGame}
           className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-full text-xl transition-all"
@@ -552,9 +682,10 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
   return (
     <div style={{ 
       position: 'relative', 
-      width: '100%',  // Use 100% width instead of fixed 400px
-      aspectRatio: '2/3', // Maintain aspect ratio (or use fixed height if preferred)
-      maxWidth: '600px', // Optional: prevent getting too wide on large screens
+      width: '100%', 
+      maxWidth: '800px',
+      height: '100vh', 
+      maxHeight: '900px',
       margin: '0 auto' 
     }}>
       <div ref={gameContainerRef} style={{ width: '100%', height: '100%' }} />
