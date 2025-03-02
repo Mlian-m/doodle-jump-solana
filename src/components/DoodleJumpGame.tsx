@@ -57,6 +57,8 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
       private lastBoostSpawn = 0; // Track when we last spawned a boost
       private boostActive = false; // Track if a boost is currently active
       private boostCollected = false; // Track if the current milestone's boost has been collected
+      private miniBoostAvailable = true; // Track if mini-boost is available
+      private miniBoostCooldown = 500; // Cooldown in ms
 
         constructor() {
         super({ key: 'DoodleJumpScene' });
@@ -109,6 +111,9 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
           
           // Load the boost item image
           this.load.image('boost-item', '/assets/bonus/paper-roll.png');
+          
+          // Load fart animation sprite
+          this.load.image('fart', '/assets/effects/fart.png');
         }
 
         create() {
@@ -235,7 +240,8 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         // Add A and D keys
         this.keys = {
           A: this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-          D: this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.D)
+          D: this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.D),
+          S: this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.S)
         };
 
         // Move the score text creation to AFTER all other setup
@@ -270,6 +276,9 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
             this
           );
         }
+        
+        // Initialize mini-boost state
+        this.miniBoostAvailable = true;
       }
       
       update(time: number, delta: number) {
@@ -450,6 +459,11 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
               }
             });
           }
+        }
+
+        // Check for down or S key press for mini-boost
+        if ((this.cursors.down?.isDown || this.keys.S?.isDown) && this.miniBoostAvailable) {
+          this.applyMiniBoost();
         }
       }
 
@@ -772,7 +786,7 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         }
       }
 
-      // Update the collectBoostItem method to mark the boost as collected
+      // Update the collectBoostItem method to ensure particles stay under the player
       collectBoostItem(p: Phaser.Physics.Arcade.Sprite, item: Phaser.Physics.Arcade.Sprite) {
         // Remove the boost item
         item.destroy();
@@ -801,34 +815,51 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
           repeat: 10
         });
         
-        // 3. Improved particles - only appear underneath the player
-        const particles = this.add.particles(p.x, p.y + 30, 'boost-item', {
-          speed: { min: 100, max: 200 },
-          angle: { min: 80, max: 100 }, // Mostly upward
-          scale: { start: 0.2, end: 0 },
-          lifespan: 800,
-          quantity: 2,
-          blendMode: 'ADD',
-          emitting: false // Start with emitting off
-        });
+        // 3. Create particles that are directly attached to the player
+        // Instead of using a particle manager, create individual particles each frame
+        // that are precisely positioned under the player
         
-        // Create a custom emitter that only emits when player is moving up
-        const emitParticles = () => {
-          if (p.body && p.body.velocity.y < 0) {
-            // Only emit particles when player is moving upward
-            particles.emitParticleAt(p.x, p.y + 30, 3);
-          }
+        // Create a container to hold our custom particles
+        const particleContainer = this.add.container(0, 0);
+        
+        // Function to create and position a single particle
+        const createParticle = () => {
+          if (!p.active) return;
+          
+          // Create a sprite at a position much lower under the player
+          // Increase the y-offset from +40 to +70 to position it significantly lower
+          const particle = this.add.sprite(p.x, p.y + 70, 'boost-item');
+          particle.setScale(0.2 * Math.random() + 0.1); // Random size
+          particle.setAlpha(0.8);
+          particle.setAngle(Math.random() * 360); // Random rotation
+          
+          // Add to container for easier management
+          particleContainer.add(particle);
+          
+          // Animate the particle
+          this.tweens.add({
+            targets: particle,
+            y: particle.y + 50 + Math.random() * 50, // Move down
+            x: particle.x + (Math.random() * 40 - 20), // Slight horizontal drift
+            alpha: 0,
+            scale: 0,
+            duration: 500 + Math.random() * 300,
+            onComplete: () => {
+              particle.destroy();
+            }
+          });
         };
         
-        // Emit particles at regular intervals
+        // Create particles at regular intervals
         const particleTimer = this.time.addEvent({
-          delay: 50,
-          callback: emitParticles,
+          delay: 30, // Create particles more frequently
+          callback: createParticle,
           callbackScope: this,
-          loop: true
+          loop: true,
+          repeat: 60 // Create 60 particles over ~2 seconds
         });
         
-        // Show boost text
+        // Show boost text that follows the player
         const boostText = this.add.text(
           p.x, 
           p.y - 50,
@@ -843,29 +874,28 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         .setOrigin(0.5)
         .setDepth(100);
         
-        // Make text follow player
-        const textFollower = this.time.addEvent({
-          delay: 10,
-          callback: () => {
-            if (p.active && boostText.active) {
-              boostText.setPosition(p.x, p.y - 50);
-            }
-          },
-          callbackScope: this,
-          loop: true
-        });
+        // Make text follow player more precisely with a direct update
+        // instead of using a timer
+        const updateTextPosition = () => {
+          if (p.active && boostText.active) {
+            boostText.setPosition(p.x, p.y - 50);
+          }
+        };
+        
+        // Add the update function to the scene's update event
+        const updateListener = this.events.on('update', updateTextPosition);
         
         // Clean up after boost effect ends
         this.time.delayedCall(2000, () => {
-          if (particles) particles.destroy();
-          if (boostText) boostText.destroy();
           particleTimer.destroy();
-          textFollower.destroy();
+          particleContainer.destroy(true); // Destroy container and all children
+          boostText.destroy();
+          this.events.off('update', updateTextPosition, undefined, false);
           this.boostActive = false;
         });
       }
       
-      // Update the spawnBoostItem method to only spawn if previous boost was collected
+      // Update the spawnBoostItem method to make the boost appear closer to the player
       spawnBoostItem() {
         if (!this.boostItems) return;
         
@@ -888,15 +918,15 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
           // IMPORTANT: Remove any existing boost items before creating a new one
           this.boostItems.clear(true, true); // This destroys all existing boost items
           
-          // Spawn the boost item at a random position ahead of the player
-          // but within the visible area (like clouds)
-          const x = Phaser.Math.Between(100, 700);
-          const y = -50; // Just above the visible area
+          // Spawn the boost item much closer to the player's current position
+          // This makes it easier to collect
+          const x = Phaser.Math.Between(200, 600);
+          const y = this.player ? this.player.y - 200 : 100; // Just above the player
           
           const boostItem = this.boostItems.create(x, y, 'boost-item');
           boostItem.setScale(0.5); // Adjust size as needed
           
-          // Make it move with the world (like clouds)
+          // Make it move with the world
           boostItem.setScrollFactor(1);
           
           // Add a glow effect
@@ -932,6 +962,55 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
             if (boostItem.active) {
               boostItem.destroy();
             }
+          });
+        }
+      }
+
+      // Add method for mini-boost
+      applyMiniBoost() {
+        if (!this.player || !this.miniBoostAvailable) return;
+        
+        // Only allow mini-boost when falling
+        if (this.player.body && this.player.body.velocity.y > 0) {
+          // Apply a small upward boost
+          this.player.setVelocityY(-300); // Small upward boost
+          
+          // Create fart animation
+          const fartParticles = this.add.particles(this.player.x, this.player.y + 30, 'fart', {
+            speed: { min: 50, max: 150 },
+            angle: { min: 80, max: 100 }, // Mostly downward
+            scale: { start: 0.2, end: 0 },
+            lifespan: 500,
+            quantity: 5,
+            blendMode: 'ADD',
+            emitting: false
+          });
+          
+          // Emit particles in a burst
+          fartParticles.emitParticleAt(this.player.x, this.player.y + 30, 10);
+          
+          // Add a small camera shake
+          this.cameras.main.shake(100, 0.01);
+          
+          // Play a quick squish animation on the player
+          this.tweens.add({
+            targets: this.player,
+            scaleX: 1.2,
+            scaleY: 0.8,
+            duration: 100,
+            yoyo: true,
+            ease: 'Sine.easeOut'
+          });
+          
+          // Set cooldown
+          this.miniBoostAvailable = false;
+          this.time.delayedCall(this.miniBoostCooldown, () => {
+            this.miniBoostAvailable = true;
+          });
+          
+          // Clean up particles after animation
+          this.time.delayedCall(500, () => {
+            if (fartParticles) fartParticles.destroy();
           });
         }
       }
@@ -990,7 +1069,7 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
 
   if (!gameStarted) {
     return (
-      <div className="rounded-lg flex flex-col items-center justify-center" 
+      <div className="rounded-lg flex flex-col items-center justify-center relative overflow-hidden" 
            style={{ 
              width: '100%', 
              maxWidth: '800px',
@@ -999,14 +1078,90 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
              margin: '0 auto',
              background: 'linear-gradient(to bottom, #96ceec, #11a4f3)' // Updated gradient colors
            }}>
-        <h2 className="text-white text-3xl font-bold mb-8 text-center">Doodle Jump</h2>
-        <p className="text-white text-lg mb-8 text-center">Use arrow keys or A/D to move left and right</p>
+        {/* Decorative clouds */}
+        <div className="absolute w-full h-full overflow-hidden pointer-events-none">
+          <img 
+            src="/assets/clouds/cloud1.png" 
+            className="absolute opacity-80" 
+            style={{ 
+              width: '120px', 
+              top: '15%', 
+              left: '10%',
+              animation: 'float 20s infinite ease-in-out'
+            }} 
+          />
+          <img 
+            src="/assets/clouds/cloud2.png" 
+            className="absolute opacity-80" 
+            style={{ 
+              width: '150px', 
+              top: '30%', 
+              right: '15%',
+              animation: 'float 25s infinite ease-in-out reverse'
+            }} 
+          />
+          <img 
+            src="/assets/clouds/cloud3.png" 
+            className="absolute opacity-80" 
+            style={{ 
+              width: '100px', 
+              top: '60%', 
+              left: '20%',
+              animation: 'float 22s infinite ease-in-out 1s'
+            }} 
+          />
+          <img 
+            src="/assets/clouds/cloud1.png" 
+            className="absolute opacity-80" 
+            style={{ 
+              width: '130px', 
+              top: '75%', 
+              right: '10%',
+              animation: 'float 18s infinite ease-in-out 2s'
+            }} 
+          />
+        </div>
+        
+        <h2 className="text-white text-3xl font-bold mb-6 text-center z-10">Hedgy Jump</h2>
+        <p className="text-white text-lg mb-4 text-center z-10">Use arrow keys or A/D to move left and right</p>
+        
+        {/* Tournament information box */}
+        <div className="bg-white bg-opacity-20 backdrop-blur-sm rounded-lg p-4 mb-6 max-w-md z-10">
+          <h3 className="text-white text-xl font-semibold mb-2 text-center">Daily Tournament</h3>
+          <p className="text-white text-sm mb-2 text-center">
+            Contribute at least 1 USDC to enter the tournament pool.
+          </p>
+          <p className="text-white text-sm text-center">
+            The player with the highest score when the countdown ends wins the entire prize pool!
+          </p>
+        </div>
+        
         <button 
           onClick={startGame}
-          className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-full text-xl transition-all"
+          className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-full text-xl transition-all z-10"
         >
           Start Game
         </button>
+        
+        {/* Animation keyframes */}
+        <style>
+          {`
+            @keyframes float {
+              0%, 100% {
+                transform: translateY(0) translateX(0);
+              }
+              25% {
+                transform: translateY(-15px) translateX(10px);
+              }
+              50% {
+                transform: translateY(5px) translateX(-10px);
+              }
+              75% {
+                transform: translateY(-5px) translateX(5px);
+              }
+            }
+          `}
+        </style>
       </div>
     );
   }
@@ -1048,4 +1203,4 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
   );
 };
 
-export default DoodleJumpGame; 
+export default DoodleJumpGame;

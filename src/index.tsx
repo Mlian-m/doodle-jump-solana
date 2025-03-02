@@ -4,6 +4,10 @@ import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
+// Add Buffer polyfill for Solana web3.js
+import { Buffer } from 'buffer';
+window.Buffer = Buffer;
+
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
