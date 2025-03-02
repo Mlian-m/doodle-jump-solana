@@ -52,6 +52,11 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
       private isGameOver = false;
       private enemies?: Phaser.Physics.Arcade.Group;
       private clouds?: Phaser.GameObjects.Group;
+      private lastMilestone = 0; // Track the last milestone reached
+      private boostItems?: Phaser.Physics.Arcade.Group; // Group for boost items
+      private lastBoostSpawn = 0; // Track when we last spawned a boost
+      private boostActive = false; // Track if a boost is currently active
+      private boostCollected = false; // Track if the current milestone's boost has been collected
 
         constructor() {
         super({ key: 'DoodleJumpScene' });
@@ -101,6 +106,9 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
               this.load.start(); // Restart loader for this asset
             }
           });
+          
+          // Load the boost item image
+          this.load.image('boost-item', '/assets/bonus/paper-roll.png');
         }
 
         create() {
@@ -111,6 +119,7 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         this.isGameOver = false;
         this.score = 0;
         this.highestY = 0;
+        this.lastMilestone = 0; // Reset the milestone tracker on restart
         
         // Explicitly call onScoreUpdate with the initial score
         onScoreUpdate(0);
@@ -231,7 +240,7 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
 
         // Move the score text creation to AFTER all other setup
         // Score display - create this AFTER everything and set highest depth
-        this.scoreText = this.add.text(16, 16, 'Score: 0', { 
+          this.scoreText = this.add.text(16, 16, 'Score: 0', { 
           fontSize: '24px',
           color: '#fff',
           stroke: '#000',
@@ -239,23 +248,28 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         })
         .setScrollFactor(0)
         .setDepth(100);
+
+        // Initialize boost items group
+        this.boostItems = this.physics.add.group();
+        this.lastBoostSpawn = 0;
+        this.boostActive = false;
+        this.boostCollected = false; // Reset the collected flag
         
-        // Add a background to the score for better visibility
-        const scoreBackground = this.add.rectangle(
-          0, 0, 
-          0, 0, // Will be sized in the next step
-          0x000000, 
-          0.3
-        )
-        .setOrigin(0, 0)
-        .setScrollFactor(0)
-        .setDepth(99); // Just below the text
-        
-        // Size and position the background based on the text
-        scoreBackground.width = this.scoreText.width + 20;
-        scoreBackground.height = this.scoreText.height + 10;
-        scoreBackground.x = this.scoreText.x - 10;
-        scoreBackground.y = this.scoreText.y - 5;
+        // Add collision between player and boost items
+        if (this.player && this.boostItems) {
+          this.physics.add.overlap(
+            this.player,
+            this.boostItems,
+            (object1, object2) => {
+              // Cast to proper types after the callback is called with correct parameters
+              const p = object1 as Phaser.Physics.Arcade.Sprite;
+              const item = object2 as Phaser.Physics.Arcade.Sprite;
+              this.collectBoostItem(p, item);
+            },
+            undefined,
+            this
+          );
+        }
       }
       
       update(time: number, delta: number) {
@@ -353,9 +367,22 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
           
           // Update highest point and score
           this.highestY -= diff;
-          this.score = Math.floor(Math.abs(this.highestY) / 10);
-          this.scoreText.setText(`Score: ${this.score}`);
-          onScoreUpdate(this.score);
+          const newScore = Math.floor(Math.abs(this.highestY) / 10);
+          
+          // Only update UI and check milestones if score has changed
+          if (newScore !== this.score) {
+            this.score = newScore;
+            this.scoreText.setText(`Score: ${this.score}`);
+            onScoreUpdate(this.score);
+            
+            // Check for score milestones (every 100 points)
+            const currentMilestone = Math.floor(this.score / 100);
+            if (currentMilestone > this.lastMilestone) {
+              console.log(`Reached milestone ${currentMilestone}, last was ${this.lastMilestone}`); // Debug log
+              this.lastMilestone = currentMilestone;
+              this.showMotivationalText();
+            }
+          }
         }
         
         // Update moving platforms
@@ -403,6 +430,26 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         // Game over when falling too far - adjust for taller screen
         if (this.player.y > CAMERA_THRESHOLD + 700) { // Increased from 500 to 700
           this.gameOver();
+        }
+
+        // Check if we should spawn a boost item
+        this.spawnBoostItem();
+        
+        // Move boost items down with camera movement
+        if (this.player && this.player.y < CAMERA_THRESHOLD && this.player.body && this.player.body.velocity.y < 0) {
+          const diff = CAMERA_THRESHOLD - this.player.y;
+          
+          // Move boost items at a much faster speed (3x the platform speed)
+          if (this.boostItems) {
+            this.boostItems.getChildren().forEach((child: any) => {
+              child.y += diff * 5.0; // Move 5x faster than platforms for better visibility
+              
+              // Remove boost items that fall off the bottom
+              if (child.y > 900) {
+                child.destroy();
+              }
+            });
+          }
         }
       }
 
@@ -516,10 +563,10 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
           this.player.setVelocityY(500); // Fall faster for effect
         }
         
-        // Game over text
+        // Game over text - moved higher up
         this.add.text(
           this.cameras.main.width / 2,
-          this.cameras.main.height / 2,
+          this.cameras.main.height / 2 - 100, // Move up by 100px
           'Game Over',
           { 
             fontSize: '40px',
@@ -530,12 +577,12 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         )
         .setOrigin(0.5)
         .setScrollFactor(0)
-        .setDepth(100); // Set high depth
+        .setDepth(100);
         
-        // Show score
+        // Show score - also moved higher
         this.add.text(
           this.cameras.main.width / 2,
-          this.cameras.main.height / 2 + 50,
+          this.cameras.main.height / 2 - 50, // Move up by 50px
           `Score: ${this.score}`,
           { 
             fontSize: '30px',
@@ -546,7 +593,7 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         )
         .setOrigin(0.5)
         .setScrollFactor(0)
-        .setDepth(100); // Set high depth
+        .setDepth(100);
       }
 
       // Add a method to create clouds
@@ -604,6 +651,290 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         
         return cloud;
       }
+
+      // Update the motivational text to appear from above
+      showMotivationalText() {
+        console.log("Showing motivational text at score:", this.score); // Debug log
+        
+        try {
+          // Create a simpler text without gradient effects first
+          const motivationalText = this.add.text(
+            400, -100, // Start above the visible area
+            "Keep going. Valhalla is near!", 
+            { 
+              fontFamily: 'Arial',
+              fontSize: '40px',
+              fontStyle: 'bold',
+              align: 'center',
+              stroke: '#0033aa',
+              strokeThickness: 8,
+              color: '#ff00ff' // Bright pink color instead of gradient
+            }
+          );
+          
+          // Center the text horizontally
+          motivationalText.setOrigin(0.5);
+          
+          // Set a high depth to appear above clouds but below score
+          motivationalText.setDepth(90);
+          
+          // Add a glow effect
+          motivationalText.setShadow(0, 0, '#0055ff', 12, true, true);
+          
+          // Make the text scroll with the game world
+          motivationalText.setScrollFactor(1);
+          
+          // Store the text's initial world position
+          const initialWorldY = this.cameras.main.scrollY - 200;
+          motivationalText.y = initialWorldY;
+          
+          // Make the text slowly fade in
+          motivationalText.setAlpha(0);
+          this.tweens.add({
+            targets: motivationalText,
+            alpha: 1,
+            duration: 1000,
+            ease: 'Sine.easeIn'
+          });
+          
+          // Simple color cycling without using context
+          let colorIndex = 0;
+          const colors = [
+            0xff0099, // Pink
+            0x493bc4, // Purple
+            0x0033aa, // Dark blue
+            0x00c3ff, // Cyan
+            0x00ffa3, // Teal
+            0xffea00  // Yellow
+          ];
+          
+          const colorTicker = this.time.addEvent({
+            delay: 100,
+            callback: () => {
+              colorIndex = (colorIndex + 1) % colors.length;
+              motivationalText.setFill('#' + colors[colorIndex].toString(16).padStart(6, '0'));
+            },
+            callbackScope: this,
+            loop: true
+          });
+          
+          // Add the text to a custom update function
+          const updateText = (time: number, delta: number) => {
+            if (!motivationalText.active) {
+              this.events.off('update', updateText);
+              return;
+            }
+            
+            const cameraY = this.cameras.main.scrollY;
+            const targetY = initialWorldY + cameraY * 0.2;
+            
+            motivationalText.y += (targetY - motivationalText.y) * 0.05;
+            
+            if (motivationalText.y > cameraY + 900) {
+              if (!motivationalText.getData('fading')) {
+                motivationalText.setData('fading', true);
+                this.tweens.add({
+                  targets: motivationalText,
+                  alpha: 0,
+                  duration: 1000,
+                  onComplete: () => {
+                    colorTicker.destroy();
+                    motivationalText.destroy();
+                  }
+                });
+              }
+            }
+          };
+          
+          this.events.on('update', updateText);
+          
+          // Add a debug text that's always visible to confirm the function is called
+          const debugText = this.add.text(
+            400, 100,
+            "Keep going. Valhalla is near!",
+            {
+              fontSize: '20px',
+              color: '#ff0000',
+              backgroundColor: '#ffffff'
+            }
+          )
+          .setOrigin(0.5)
+          .setScrollFactor(0)
+          .setDepth(101);
+          
+          // Remove debug text after 3 seconds
+          this.time.delayedCall(3000, () => {
+            debugText.destroy();
+          });
+          
+        } catch (error) {
+          console.error("Error in showMotivationalText:", error);
+        }
+      }
+
+      // Update the collectBoostItem method to mark the boost as collected
+      collectBoostItem(p: Phaser.Physics.Arcade.Sprite, item: Phaser.Physics.Arcade.Sprite) {
+        // Remove the boost item
+        item.destroy();
+        
+        // Prevent collecting multiple boosts at once
+        if (this.boostActive) return;
+        this.boostActive = true;
+        
+        // Mark that we've collected a boost for the current milestone
+        this.boostCollected = true;
+        
+        // Apply a massive upward boost
+        p.setVelocityY(-2000); // Much stronger than normal jump
+        
+        // Add visual effects
+        
+        // 1. Camera shake
+        this.cameras.main.shake(500, 0.02);
+        
+        // 2. Character animation - rapid flashing
+        const flashTween = this.tweens.add({
+          targets: p,
+          alpha: 0.2,
+          duration: 50,
+          yoyo: true,
+          repeat: 10
+        });
+        
+        // 3. Improved particles - only appear underneath the player
+        const particles = this.add.particles(p.x, p.y + 30, 'boost-item', {
+          speed: { min: 100, max: 200 },
+          angle: { min: 80, max: 100 }, // Mostly upward
+          scale: { start: 0.2, end: 0 },
+          lifespan: 800,
+          quantity: 2,
+          blendMode: 'ADD',
+          emitting: false // Start with emitting off
+        });
+        
+        // Create a custom emitter that only emits when player is moving up
+        const emitParticles = () => {
+          if (p.body && p.body.velocity.y < 0) {
+            // Only emit particles when player is moving upward
+            particles.emitParticleAt(p.x, p.y + 30, 3);
+          }
+        };
+        
+        // Emit particles at regular intervals
+        const particleTimer = this.time.addEvent({
+          delay: 50,
+          callback: emitParticles,
+          callbackScope: this,
+          loop: true
+        });
+        
+        // Show boost text
+        const boostText = this.add.text(
+          p.x, 
+          p.y - 50,
+          "SUPER POOPER BOOST!",
+          {
+            fontSize: '24px',
+            color: '#ffff00',
+            stroke: '#ff0000',
+            strokeThickness: 6
+          }
+        )
+        .setOrigin(0.5)
+        .setDepth(100);
+        
+        // Make text follow player
+        const textFollower = this.time.addEvent({
+          delay: 10,
+          callback: () => {
+            if (p.active && boostText.active) {
+              boostText.setPosition(p.x, p.y - 50);
+            }
+          },
+          callbackScope: this,
+          loop: true
+        });
+        
+        // Clean up after boost effect ends
+        this.time.delayedCall(2000, () => {
+          if (particles) particles.destroy();
+          if (boostText) boostText.destroy();
+          particleTimer.destroy();
+          textFollower.destroy();
+          this.boostActive = false;
+        });
+      }
+      
+      // Update the spawnBoostItem method to only spawn if previous boost was collected
+      spawnBoostItem() {
+        if (!this.boostItems) return;
+        
+        // Calculate the current milestone (hundreds)
+        const currentHundred = Math.floor(this.score / 100);
+        
+        // Only spawn a boost if:
+        // 1. We're past the first hundred (score > 100)
+        // 2. We haven't spawned a boost for this hundred yet
+        // 3. Either this is the first boost (lastBoostSpawn = 0) OR
+        //    we collected the previous boost (boostCollected = true)
+        if (currentHundred > 0 && 
+            currentHundred > this.lastBoostSpawn && 
+            (this.lastBoostSpawn === 0 || this.boostCollected)) {
+          
+          console.log(`Spawning boost item for level ${currentHundred}00 at score ${this.score}`);
+          this.lastBoostSpawn = currentHundred;
+          this.boostCollected = false; // Reset for the next milestone
+          
+          // IMPORTANT: Remove any existing boost items before creating a new one
+          this.boostItems.clear(true, true); // This destroys all existing boost items
+          
+          // Spawn the boost item at a random position ahead of the player
+          // but within the visible area (like clouds)
+          const x = Phaser.Math.Between(100, 700);
+          const y = -50; // Just above the visible area
+          
+          const boostItem = this.boostItems.create(x, y, 'boost-item');
+          boostItem.setScale(0.5); // Adjust size as needed
+          
+          // Make it move with the world (like clouds)
+          boostItem.setScrollFactor(1);
+          
+          // Add a glow effect
+          const glowTween = this.tweens.add({
+            targets: boostItem,
+            alpha: { from: 0.7, to: 1 },
+            duration: 800,
+            yoyo: true,
+            repeat: -1
+          });
+          
+          // Add a floating effect
+          this.tweens.add({
+            targets: boostItem,
+            y: y + 20,
+            duration: 1500,
+            yoyo: true,
+            repeat: -1
+          });
+          
+          // Add a gentle rotation effect
+          this.tweens.add({
+            targets: boostItem,
+            angle: 360,
+            duration: 8000, // Slower rotation
+            repeat: -1,
+            ease: 'Linear'
+          });
+          
+          // Add a timeout to remove this boost item if not collected
+          // This ensures it doesn't stay around forever
+          this.time.delayedCall(15000, () => {
+            if (boostItem.active) {
+              boostItem.destroy();
+            }
+          });
+        }
+      }
     }
 
     // Only create the game if it doesn't exist
@@ -659,13 +990,14 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
 
   if (!gameStarted) {
     return (
-      <div className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-600 flex flex-col items-center justify-center" 
+      <div className="rounded-lg flex flex-col items-center justify-center" 
            style={{ 
              width: '100%', 
              maxWidth: '800px',
              height: '100vh', 
              maxHeight: '900px',
-             margin: '0 auto' 
+             margin: '0 auto',
+             background: 'linear-gradient(to bottom, #96ceec, #11a4f3)' // Updated gradient colors
            }}>
         <h2 className="text-white text-3xl font-bold mb-8 text-center">Doodle Jump</h2>
         <p className="text-white text-lg mb-8 text-center">Use arrow keys or A/D to move left and right</p>
@@ -705,7 +1037,8 @@ const DoodleJumpGame: React.FC<DoodleJumpGameProps> = ({ onScoreUpdate }) => {
         }}>
           <button 
             onClick={restartGame}
-            className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-full text-xl mt-32"
+            className="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-full text-xl"
+            style={{ marginTop: '150px' }} // Position the button lower
           >
             Play Again
           </button>
